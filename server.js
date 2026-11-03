@@ -1,141 +1,159 @@
+
 const express = require('express');
 const mongoose = require('mongoose');
 require('dotenv').config();
+
 const app = express();
 app.use(express.json());
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/feedback_db';
-mongoose.connect(MONGO_URI)
-  .then(() => console.log('Connected to MongoDB successfully'))
-  .catch((err) => console.error('MongoDB connection error:', err));
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/feedback_db')
+.then(() => console.log('MongoDB Connected'))
+.catch(err => console.log(err));
 
-const feedbackSchema=new mongoose.Schema({
-  studentName:{
-    type:String,
-    required:[true,'Student name is required'],
-    trim:true
-  },
-  courseName:{
-    type: String,
-    required:[true,'Course name is required'],
-    trim:true
-  },
-  message:{
-    type: String,
-    required: [true,'Feedback message is required'],
-    trim: true
-  },
-  rating:{
-    type:Number,
-    required:[true,'Rating is required'],
-    min: [1,'Rating must be at least 1'],
-    max: [5,'Rating cannot exceed 5']
-  },
-  status:{
-    type: String,
-    enum:['Pending','Reviewed'],
-    default:'Pending'
-  }
-}, {
-  timestamps:true
-});
+// Feedback Schema
+const feedbackSchema = new mongoose.Schema({
+    studentName: {
+        type: String,
+        required: [true, 'Student name is required'],
+        trim: true
+    },
+    courseName: {
+        type: String,
+        required: [true, 'Course name is required'],
+        trim: true
+    },
+    message: {
+        type: String,
+        required: [true, 'Feedback message is required'],
+        trim: true
+    },
+    rating: {
+        type: Number,
+        required: [true, 'Rating is required'],
+        min: [1, 'Rating must be at least 1'],
+        max: [5, 'Rating cannot exceed 5']
+    },
+    status: {
+        type: String,
+        enum: ['Pending', 'Reviewed'],
+        default: 'Pending'
+    }
+}, { timestamps: true });
 
-const Feedback=mongoose.model('Feedback',feedbackSchema);
+const Feedback = mongoose.model('Feedback', feedbackSchema);
 
-// ==========================================
-// SUBTASK 1: Submit Student Feedback
-// POST /api/feedback
-// ==========================================
+
+// 1. Submit Feedback
 app.post('/api/feedback', async (req, res) => {
-  try {
-    const { studentName, courseName, message, rating } = req.body;
+    try {
+        const feedback = new Feedback(req.body);
+        const data = await feedback.save();
 
-    // Create and save new feedback record
-    const feedback = new Feedback({
-      studentName,
-      courseName,
-      message,
-      rating
-    });
+        res.status(201).json({
+            success: true,
+            message: 'Feedback submitted successfully',
+            data: data
+        });
 
-    const savedFeedback = await feedback.save();
-    return res.status(201).json({
-      success: true,
-      message: 'Feedback submitted successfully',
-      data: savedFeedback
-    });
-  } catch (error) {
-    if (error.name==='ValidationError') {
-      const messages = Object.values(error.errors).map(val=>val.message);
-      return res.status(400).json({success:false,error:messages});
+    } catch (err) {
+        if (err.name === 'ValidationError') {
+            const errors = Object.values(err.errors).map(e => e.message);
+            return res.status(400).json({
+                success: false,
+                error: errors
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: 'Internal Server Error'
+        });
     }
-    return res.status(500).json({success:false,error:'Internal Server Error' });
-  }
 });
 
-// ==========================================
-// SUBTASK 2: Retrieve Feedback with Pagination
-// GET /api/feedback?page=1&limit=5
-// ==========================================
+
+// 2. Get Feedback with Pagination
 app.get('/api/feedback', async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
-    const skip = (page - 1) * limit;
+    try {
+        const page = Number(req.query.page) || 1;
+        const limit = Number(req.query.limit) || 5;
 
-    const [records, totalRecords] = await Promise.all([
-      Feedback.find().sort({ createdAt: -1 }).skip(skip).limit(limit),
-      Feedback.countDocuments()
-    ]);
+        const data = await Feedback.find()
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit);
 
-    return res.status(200).json({
-      success: true,
-      currentPage: page,
-      limit,
-      totalPages: Math.ceil(totalRecords/limit),
-      totalRecords,
-      data: records
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Internal Server Error' });
-  }
+        const total = await Feedback.countDocuments();
+
+        res.status(200).json({
+            success: true,
+            currentPage: page,
+            limit: limit,
+            totalPages: Math.ceil(total / limit),
+            totalRecords: total,
+            data: data
+        });
+
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            error: 'Internal Server Error'
+        });
+    }
 });
 
+
+// 3. Update Feedback Status
 app.patch('/api/feedback/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
+    try {
+        const status = req.body.status;
 
-    if (!status||!['Pending','Reviewed'].includes(status)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid or missing status. Allowed values are "Pending" or "Reviewed".' 
-      });
-    }
-    const updatedFeedback = await Feedback.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true,runValidators:true }
-    );
+        if (!['Pending', 'Reviewed'].includes(status)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid or missing status. Allowed values are "Pending" or "Reviewed".'
+            });
+        }
 
-    if (!updatedFeedback) {
-      return res.status(404).json({success:false,error:'Feedback record not found' });
-    }
+        const data = await Feedback.findByIdAndUpdate(
+            req.params.id,
+            { status: status },
+            { new: true, runValidators: true }
+        );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Feedback status updated successfully',
-      data: updatedFeedback
-    });
-  } catch (error) {
-    if (error.name === 'CastError') {
-      return res.status(400).json({ success: false, error: 'Invalid feedback ID format' });
+        if (!data) {
+            return res.status(404).json({
+                success: false,
+                error: 'Feedback record not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Feedback status updated successfully',
+            data: data
+        });
+
+    } catch (err) {
+        if (err.name === 'CastError') {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid feedback ID format'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: 'Internal Server Error'
+        });
     }
-    return res.status(500).json({ success: false, error: 'Internal Server Error' });
-  }
 });
 
+
+// Start Server
 const PORT = process.env.PORT || 5000;
+
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
